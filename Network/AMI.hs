@@ -31,8 +31,19 @@ import qualified Data.ByteString.Char8 as B
 import qualified Data.ByteString.Lazy as L
 import Data.Digest.Pure.MD5
 import System.IO.Unsafe (unsafePerformIO)
-import Network
 import Network.Socket
+  ( SockAddr(..)
+  , addrAddress
+  , addrFamily
+  , addrProtocol
+  , addrSocketType
+  , connect
+  , defaultHints
+  , getAddrInfo
+  , socket
+  , socketToHandle
+  , withSocketsDo
+  )
 import System.IO
 
 {- $usage
@@ -143,7 +154,7 @@ getHandle :: AMI Handle
 getHandle = do
   mbh <- getAMI amiHandle
   case mbh of
-    Nothing -> fail "Connection is not opened"
+    Nothing -> error "Connection is not opened"
     Just h -> return h
 
 -- | Add an event handler
@@ -180,24 +191,28 @@ query t ps = do
            writeTVar var $ st {amiResponses = M.delete i resps}
            return a
         Just (Nothing) -> retry
-        Nothing -> fail $ "There was no response for Action " ++ show i
+        Nothing -> error $ "There was no response for Action " ++ show i
 
 -- | Open a connection to Asterisk and authenticate
 open :: ConnectInfo -> AMI ThreadId
 open info = do
-    h <- liftIO $ connectTo (ciHost info) (PortNumber $ fromIntegral $ ciPort info)
+    addr:_ <- liftIO $ getAddrInfo (Just defaultHints) (Just (ciHost info)) (Just $ show (ciPort info))
+    sock <- liftIO $ socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+    h <- liftIO $ connect sock (addrAddress addr) >> socketToHandle sock ReadWriteMode
     t <- forkAnswersReader h
     modifyAMI $ \st -> st {amiHandle = Just h}
     s <- liftIO $ B.hGetLine h
     auth <- query "Login" [("Username", ciUsername info), ("Secret", ciSecret info)]
     case auth of
       Response _ "Success" _ _ -> return t
-      _ -> fail "Authentication failed"
+      _ -> error "Authentication failed"
 
 -- | Open a connection to Asterisk and authenticate using MD5 challenge
 openMD5 :: ConnectInfo -> AMI ThreadId
 openMD5 info = do
-    h <- liftIO $ connectTo (ciHost info) (PortNumber $ fromIntegral $ ciPort info)
+    addr:_ <- liftIO $ getAddrInfo (Just defaultHints) (Just (ciHost info)) (Just $ show (ciPort info))
+    sock <- liftIO $ socket (addrFamily addr) (addrSocketType addr) (addrProtocol addr)
+    h <- liftIO $ connect sock (addrAddress addr) >> socketToHandle sock ReadWriteMode
     s <- liftIO $ B.hGetLine h
     t <- forkAnswersReader h
     modifyAMI $ \st -> st {amiHandle = Just h}
